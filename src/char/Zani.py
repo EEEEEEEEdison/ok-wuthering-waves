@@ -21,6 +21,7 @@ class Zani(BaseChar):
         """共用状态重置：__init__ 与 reset_state 各字段保持一致。"""
         self.char_phoebe = None
         self.char_rover = None
+        self._rover_form_pending = False
         self.blazes_threshold = -1
         self.chair_time = -1
         self._zanfei_guang = False
@@ -78,7 +79,7 @@ class Zani(BaseChar):
         return False
 
     def do_perform(self):
-        if self.blazes_threshold == -1:
+        if self.blazes_threshold == -1 or getattr(self, '_rover_form_pending', False):
             self.decide_teammate()
         # target lost 防护（非大招）：连续 3 轮无目标主动出战斗（runtime 每轮 3s 重试会永久站桩）
         if not self.in_liberation and not self.task.has_target():
@@ -91,14 +92,18 @@ class Zani(BaseChar):
         self._no_target_streak = 0
         if self._zanfei_guang:
             return self._do_perform_zanfei()
+        entry_start = time.time()
         self.wait_down()
+        self.logger.info(f'zani: entry ready path=regular elapsed={time.time() - entry_start:.2f}')
         self.check_liber()
         if self.in_liberation:
             self.state = 1
             if self.should_end_liberation():
-                self.click_liber2()
+                if self.click_liber2():
+                    return self._switch_to_phoebe_full()
             else:
-                self.nightfall_combo()
+                if self.nightfall_combo():
+                    return self._switch_to_phoebe_full()
             return self.switch_next_char()
         return self._non_liber_rotation(zanfei=False)
 
@@ -112,6 +117,10 @@ class Zani(BaseChar):
         forte_full = self.is_e_forte_full()
         e_available = self.current_resonance() > 0.05
         liber_avail = self.liberation_available()
+        self.logger.info(
+            f'zani: trace non-liber sample forte={forte_full} e={e_available} '
+            f'liber={liber_avail} blazes={self.blazes:.2f} intro={self.has_intro}'
+        )
         if self.has_intro and self.blazes >= 1 and not liber_avail:
             self.sleep(0.2, check_combat=False)
             liber_avail = self.liberation_available()
@@ -119,7 +128,9 @@ class Zani(BaseChar):
         return forte_full, e_available, liber_avail, float(self.blazes) + 0.1
 
     def _do_perform_zanfei(self):
+        entry_start = time.time()
         self.wait_down()
+        self.logger.info(f'zani: entry ready path=zanfei elapsed={time.time() - entry_start:.2f}')
         self.check_liber()
         if self.in_liberation:
             self.state = 1
@@ -135,8 +146,10 @@ class Zani(BaseChar):
         forte_full, e_available, liber_avail, predicted = self._sample_non_liber_rotation(
             reset_liber_phase=reset_liber_phase
         )
-        # 场景3：有大（zanfei 光不看焰光；赞菲守需焰光满）→ 直接开大
+        # 场景3：有大（赞菲守需焰光满）→ 能直接开大就直接开大（不等强化E 命中）；
+        # 无法直接开大（liber_avail False）走下方 crisis 过渡（E 强化E 命中后开大）
         if (zanfei or self.blazes >= 1) and liber_avail:
+            self.logger.info('zani: trace non-liber branch=direct-liberation')
             if not self._try_liberation(zanfei=zanfei):
                 self.sleep(0.1)
                 self._try_liberation(zanfei=zanfei)
@@ -146,11 +159,13 @@ class Zani(BaseChar):
         if zanfei:
             # 赞菲光没大：crisis 动作作过渡（强化E图标在→scene4 快路径；否则→scene1 E+普攻）→ 动作完无条件开大
             if forte_full or e_available:
+                self.logger.info('zani: trace non-liber branch=zanfei-crisis')
                 self.crisis_response_protocol_combo()
                 self._try_liberation(wait_crisis=True, zanfei=True)
                 return
             # 场景2：E 在 CD → 普攻过渡后切走（菲比补协奏再入场）
             self.normal_attack_until_can_switch()
+            self.logger.info('zani: trace non-liber branch=zanfei-normal-attack')
             return self.switch_next_char()
         # 场景4：强化E已就绪 → 蓄力后预测达标（一个强化E后能到阈值）则开大
         if forte_full:
@@ -191,8 +206,14 @@ class Zani(BaseChar):
         return self.consume_liber_handoff()
 
     def _complete_liberation_to_phoebe(self, phase=4):
-        self.click_liber2()
+        self.logger.info(f'zani: trace r2-complete begin phase={phase} blazes={self.blazes}')
+        self.logger.info('zani: trace r2-complete action=liber2 begin')
+        if not self.click_liber2():
+            self.logger.info('zani: trace r2-complete result=unconfirmed fallback=base-switch')
+            return self.switch_next_char()
+        self.logger.info(f'zani: trace r2-complete action=liber2 end state={self.state} in_liber={self.in_liberation}')
         self._liber_phase = phase
+        self.logger.info(f'zani: trace r2-complete action=force-phoebe phase={phase}')
         return self._switch_to_phoebe_full()
 
     def _run_phase_three_liberation(self):
@@ -241,10 +262,18 @@ class Zani(BaseChar):
             phoebe = self.task.has_char(Phoebe)
             self.char_phoebe = phoebe
         if phoebe is None:
+            self.logger.info('zani: trace r2-switch result=no-phoebe fallback=base-switch')
             return self.switch_next_char()
-        self.logger.info('zanfei: force switch to Phoebe (full perform after R2)')
+        self.logger.info(
+            f'zani: force switch to Phoebe (full perform after R2) '
+            f'trace=begin phoebe_att={phoebe.attribute} star={phoebe.star_available} '
+            f'charges={phoebe.remaining_charges}'
+        )
+        self.logger.info('zani: trace r2-switch action=phoebe-reset-action')
         phoebe.reset_action()
+        self._liber_handoff_token = 0
         self._liber_phase = 0
+        self.logger.info('zani: trace r2-switch input=force-switch-phoebe')
         return self._force_switch_to(phoebe)
 
     def _try_liberation(self, wait_crisis=False, zanfei=False):
@@ -253,7 +282,9 @@ class Zani(BaseChar):
             self.wait_crisis_protocol_end()
             if zanfei:
                 self.update_blazes()
-            elif not self._wait_enhanced_e_commit(before_blazes):
+            # 做了 crisis 动作（强化E）就等命中再开大（赞菲光与赞菲守一致）——
+            # committed 要求焰光增量：未命中不开大，下一轮再判
+            if not self._wait_enhanced_e_commit(before_blazes):
                 return False
         if self.echo_available():
             self.click_echo(time_out=0)
@@ -278,6 +309,7 @@ class Zani(BaseChar):
         return committed
 
     def _start_liberation(self):
+        self._liber_handoff_token = 0
         self.crisis_time = -1
         self.state = 1
         self.in_liberation = True
@@ -307,48 +339,92 @@ class Zani(BaseChar):
 
     def click_liber2(self):
         start = time.time()
+        total_deadline = start + 6.0
+        cast_started_at = None
+        self.logger.info('zani: trace liber2 begin')
         self.task.in_liberation = True
         send_key = True
         not_liber_box = self.task.box_of_screen_scaled(2560, 1440, 1909, 1274, 1957, 1322, name='zani_not_liber_box', hcenter=True)
-        while not self.task.find_one('box_target_enemy_inner', box=not_liber_box, threshold=0.75):
-            if time.time() - start > 6:
+        inputs = 0
+        while True:
+            now = time.time()
+            if now >= total_deadline:
                 self.task.in_liberation = False
                 # 默认已退大，仅当前帧明确显示仍在大招时 check_liber() 置回 True（避免保留旧值）
                 self.in_liberation = False
                 if not self.check_liber():
                     self.update_blazes()
-                return
+                self.logger.info(f'zani: trace liber2 end reason=timeout inputs={inputs}')
+                return False
+            if self.task.find_one('box_target_enemy_inner', box=not_liber_box, threshold=0.75):
+                break
             if self.current_resonance() == 0:
-                start = time.time()
-            elif time.time() - start > 1.5:
+                send_key = True
+            elif cast_started_at is not None and now - cast_started_at > 1.5:
                 send_key = False
             if send_key:
+                if inputs == 0:
+                    self.logger.info('zani: trace liber2 input=liber-key')
                 self.send_liberation_key()
+                if cast_started_at is None:
+                    cast_started_at = now
+                inputs += 1
             self.task.next_frame()
         self.task.in_liberation = False
         current = time.time()
         duration = 2.25
-        if current - start >= duration:
+        confirmed = cast_started_at is not None and current - cast_started_at >= duration
+        if confirmed:
             self.last_liber2 = current
             self.add_freeze_duration(current - duration, duration, 0)
             self.logger.info('clicked liber2')
+        else:
+            self.logger.info(f'zani: liber2 target detected before confirmation duration={current - start:.2f}s')
         self.in_liberation = False
         self.blazes = -1
         self.liberation_time = -1
         self.state = 0
+        self.logger.info(f'zani: trace liber2 end reason=target-detected total={current - start:.2f}s cast={current - cast_started_at if cast_started_at is not None else 0:.2f}s inputs={inputs} confirmed={confirmed}')
+        return confirmed
 
     def should_end_liberation(self, time_only=False):
-        if self.liberation_time_left() < 1.0:
+        start = time.time()
+        left = self.liberation_time_left()
+        mode = 'time-only' if time_only else 'full'
+        if left < 1.0:
+            self.logger.info(
+                f'zani: r2-gate result=end reason=time-left mode={mode} '
+                f'left={left:.2f} elapsed={time.time() - start:.2f}'
+            )
             self.logger.info('Liberation is about to end, perform liberation2')
             return True
-        if time_only or self.is_nightfall_ready():
+        if time_only:
+            self.logger.info(
+                f'zani: r2-gate result=continue reason=time-only left={left:.2f} '
+                f'elapsed={time.time() - start:.2f}'
+            )
+            return False
+        if self.is_nightfall_ready():
+            self.logger.info(
+                f'zani: r2-gate result=continue reason=nightfall-ready left={left:.2f} '
+                f'elapsed={time.time() - start:.2f}'
+            )
             return False
         if not self.is_mouse_forte_full():
             # 重击条未满站桩重读 1.0s（防提前 R2——0.5s 不够，1s 兜底）
-            if not self.task.wait_until(self.is_mouse_forte_full, time_out=1.0, settle_time=0.1):
+            waited = self.task.wait_until(self.is_mouse_forte_full, time_out=1.0, settle_time=0.1)
+            self.logger.info(
+                f'zani: r2-gate forte-wait result={waited} left={left:.2f} '
+                f'elapsed={time.time() - start:.2f}'
+            )
+            if not waited:
+                self.logger.info('zani: r2-gate result=end reason=forte-timeout')
                 self.logger.info('Cannot perform another nightfall, perform liberation2')
                 return True
-            return False
+        self.logger.info(
+            f'zani: r2-gate result=continue reason=forte-ready left={left:.2f} '
+            f'elapsed={time.time() - start:.2f}'
+        )
         return False
 
 
@@ -365,8 +441,8 @@ class Zani(BaseChar):
                 self.click()
                 if time.time() - start > acquire_timeout or not self.in_liberation:
                     return
-                if self.should_end_liberation(time_only=True) and self.click_liber2():
-                    return
+                if self.should_end_liberation(time_only=True):
+                    return self.click_liber2()
                 self.check_combat()
                 self.task.next_frame()
         self.continues_normal_attack(0.5)
@@ -462,16 +538,22 @@ class Zani(BaseChar):
 
     def crisis_response_protocol_combo(self):
         self.check_combat()
+        initial_forte = self.is_e_forte_full()
+        self.logger.info(f'zani: trace crisis begin forte={initial_forte}')
         # 蓄力：一轮「E+普攻」涨一半，两轮满；找图失败与条不满无法区分——循环兜底不阻断
-        if not self.is_e_forte_full():
-            for _ in range(2):
+        if not initial_forte:
+            for attempt in range(2):
                 if self.is_e_forte_full():
+                    self.logger.info(f'zani: trace crisis forte-ready attempt={attempt}')
                     break
                 result = self.basic_attack_breakthrough()
+                self.logger.info(f'zani: trace crisis breakthrough attempt={attempt + 1} result={result}')
                 if result == State.FORTE_FULL:
                     break
         # 等强化E出现（普攻后时间差）再点击；找图失败 2s 超时兜底（blazes 增量把关）
-        self.wait_until(self.is_e_forte_full, time_out=2, settle_time=0.15)
+        ready = self.wait_until(self.is_e_forte_full, time_out=2, settle_time=0.15)
+        self.logger.info(f'zani: trace crisis wait-forte ready={ready} current={self.is_e_forte_full()}')
+        self.logger.info('zani: trace crisis input=resonance-E')
         self.send_resonance_key()
         self.crisis_time = time.time()
         return True
@@ -529,24 +611,31 @@ class Zani(BaseChar):
 
     def decide_teammate(self):
         from src.char.Phoebe import Phoebe
-        from src.char.HavocRover import HavocRover
+        from src.char.Rover import Rover
         if (char := self.task.has_char(Phoebe)):
             self.char_phoebe = char
             self.blazes_threshold = 0.6
         else:
             self.blazes_threshold = 0.4
-        self.char_rover = self.task.has_char(HavocRover)
+        self.char_rover = self.task.has_char(Rover)
+        rover_form = (
+            self.task.get_known_ring_index(self.char_rover)
+            if self.char_rover is not None and hasattr(self.task, 'get_known_ring_index')
+            else getattr(self.char_rover, 'ring_index', -1)
+        )
+        self._rover_form_pending = self.char_rover is not None and rover_form < 0
         self._zanfei_guang = bool(self.char_phoebe and self.char_rover)
-        # 赞菲光下光主参与默认切人 buff 池（工厂全形态仍是 MainDps，不改 CharFactory）
-        if self._zanfei_guang and self.char_rover is not None:
+        if self._zanfei_guang:
             self.char_rover.set_char_type(CharType.SUB_DPS)
-            # 工厂显式喂过 buff_time=0（_buff_time_configured=True），set_char_type 不会重算，此处强制 14
             self.char_rover.set_buff_time(14)
             self.logger.info(
                 f'zanfei: Rover local SubDps for switch char_type={self.char_rover.char_type} '
                 f'buff_time={self.char_rover.buff_time}'
             )
-        self.logger.info(f'zani decide_teammate zanfei={self._zanfei_guang} threshold={self.blazes_threshold}')
+        self.logger.info(
+            f'zani decide_teammate zanfei={self._zanfei_guang} threshold={self.blazes_threshold} '
+            f'rover_form={rover_form} pending={self._rover_form_pending}'
+        )
 
     def update_blazes(self):
         box = self.task.box_of_screen_scaled(3840, 2160, 1627, 2014, 2176, 2017, name='zani_blazes', hcenter=True)

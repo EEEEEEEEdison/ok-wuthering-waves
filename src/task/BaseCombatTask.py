@@ -41,6 +41,7 @@ mismatched_names = {
     "Luhesi": "Luuk Herssen",
     "Xiangliyao": "Xiangli Yao",
     "ShoreKeeper": "Shorekeeper",
+    "Rover": "Rover",
     "HavocRover": "Rover",
     "YangYangSp": "Yangyang: Xuanling",
 }
@@ -928,26 +929,67 @@ class BaseCombatTask(CombatCheck):
         """
         return self.get_current_con() == 1
 
-    def _ensure_ring_index(self):
-        """确保当前角色协奏值环的颜色索引已识别。
+    def refresh_chars_display(self):
+        """Publish current character display names after a runtime form correction."""
+        translated_names = []
+        for char in self.chars:
+            if char is None:
+                continue
+            official_name = getattr(char, 'display_name', None) or mismatched_names.get(char.name, char.name)
+            translated_names.append(self.tr(official_name) if self._app is not None else official_name)
+        self.info_set('Chars', ', '.join(translated_names))
 
-        Returns:
-            int: 协奏值环的颜色索引。
+    def refresh_rover_form_context(self, rover):
+        """Publish a corrected Rover form and refresh dependent Zanfei team facts."""
+        self.refresh_chars_display()
+        for char in self.chars:
+            if char is rover or type(char).__name__ not in ('Phoebe', 'Zani'):
+                continue
+            char.decide_teammate()
+        self.log_info(f'rover form context refreshed {rover}')
+
+    def get_known_ring_index(self, char):
+        """Return a character's confirmed concerto element without guessing off-field UI.
+
+        Only the current character owns the visible concerto ring.  An off-field
+        Rover with ``ring_index < 0`` must remain unknown until it takes the field.
         """
-        if self.get_current_char().ring_index < 0:
-            box = self.get_con_box()
+        if char is None:
+            return -1
+        if char.ring_index >= 0:
+            return char.ring_index
+        if char is self.get_current_char():
+            return self._ensure_ring_index()
+        return -1
 
-            best_index = 0
-            best_percentage = 0
-            for i in range(len(con_colors)):
-                percent = self.calculate_color_percentage(con_colors[i], box)
-                if percent > best_percentage:
-                    best_percentage = percent
-                    best_index = i
-            self.get_current_char().ring_index = best_index
+    def _ensure_ring_index(self, refresh=False):
+        """Return the current character's concerto element without inventing a form.
+
+        ``refresh`` is used only after Rover takes the field: a later UI sample
+        may correct an early loading-screen candidate. Missing color signal
+        never replaces a confirmed form.
+        """
+        current = self.get_current_char()
+        if current is None:
+            return -1
+        if current.ring_index >= 0 and not refresh:
+            return current.ring_index
+        box = self.get_con_box()
+        percentages = [self.calculate_color_percentage(color, box) for color in con_colors]
+        best_index, best_percentage = max(enumerate(percentages), key=lambda item: item[1])
+        if best_percentage <= 0:
             self.log_debug(
-                f'_ensure_ring_index {self.get_current_char()} to {self.get_current_char().ring_index} {con_templates[best_index]}')
-        return self.get_current_char().ring_index
+                f'_ensure_ring_index no-signal current={current} percentages={percentages} '
+                f'kept={current.ring_index}'
+            )
+            return current.ring_index
+        previous_index = current.ring_index
+        current.ring_index = best_index
+        self.log_debug(
+            f'_ensure_ring_index current={current} previous={previous_index} '
+            f'percentages={percentages} result={best_index} {con_templates[best_index]}'
+        )
+        return current.ring_index
 
     def get_con_box(self):
         """获取协奏值能量环的UI区域盒子对象。

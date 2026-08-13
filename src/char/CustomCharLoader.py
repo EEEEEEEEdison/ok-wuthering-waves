@@ -10,6 +10,7 @@ logger = Logger.get_logger(__name__)
 
 CUSTOM_CHAR_FOLDER = "custom_chars"
 CUSTOM_CHAR_MODES_FILE = "custom_chars.json"
+LEGACY_CLASS_NAMES = {"HavocRover": "Rover"}
 
 _custom_class_cache = {}
 
@@ -31,9 +32,13 @@ def get_custom_char_file(char_cls_or_name):
 
 
 def _get_class_name(char_cls_or_name):
-    if isinstance(char_cls_or_name, str):
-        return char_cls_or_name
-    return char_cls_or_name.__name__
+    class_name = char_cls_or_name if isinstance(char_cls_or_name, str) else char_cls_or_name.__name__
+    return LEGACY_CLASS_NAMES.get(class_name, class_name)
+
+
+def _legacy_custom_char_file(class_name):
+    legacy_name = next((old for old, new in LEGACY_CLASS_NAMES.items() if new == class_name), None)
+    return get_custom_char_folder(create=True) / f"{legacy_name}.py" if legacy_name else None
 
 
 def load_custom_char_modes():
@@ -45,7 +50,12 @@ def load_custom_char_modes():
     except Exception as e:
         logger.error(f"load custom char modes failed: {e}")
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    for old_name, new_name in LEGACY_CLASS_NAMES.items():
+        if old_name in data and new_name not in data:
+            data[new_name] = data[old_name]
+    return data
 
 
 def save_custom_char_modes(modes):
@@ -125,7 +135,10 @@ def load_custom_char_class(char_cls):
 
     path = get_custom_char_file(char_cls)
     if not path.exists():
-        return char_cls
+        legacy_path = _legacy_custom_char_file(_get_class_name(char_cls))
+        if legacy_path is None or not legacy_path.exists():
+            return char_cls
+        path = legacy_path
 
     try:
         return _load_custom_char_class_from_file(char_cls, path)
@@ -150,6 +163,8 @@ def _load_custom_char_class_from_file(char_cls, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     custom_cls = getattr(module, char_cls.__name__, None)
+    if custom_cls is None and char_cls.__name__ == "Rover":
+        custom_cls = getattr(module, "HavocRover", None)
     if custom_cls is None:
         raise RuntimeError(f"Custom code must define class {char_cls.__name__}")
 
