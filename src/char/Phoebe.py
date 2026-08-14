@@ -8,7 +8,6 @@ from ok import color_range_to_bound
 class State(Enum):
     SUCCESS = 1
     UNAVAILABLE = 2
-    TIMEOUT = 3
 
 class Phoebe(BaseChar):
 
@@ -48,7 +47,6 @@ class Phoebe(BaseChar):
         self.team = 0  # 1=赞菲光 2=赞菲守 3=卡提+光主 0=其他
         self._rover_form_pending = False
         self._zanfei_guang = False
-        self._force_switch_me = False
         self._invalidate_form_charges()
         self.state = dict(self.PHOEBE_BASE_STATE)
 
@@ -62,11 +60,6 @@ class Phoebe(BaseChar):
         self._reset_phoebe_state()
 
     def get_switch_priority(self, current_char=None, has_intro=False, target_low_con=False):
-        if self._force_switch_me:
-            return SwitchPriority.MUST
-        for char in self.task.chars:
-            if char is not None and char is not self and getattr(char, '_force_switch_me', False):
-                return SwitchPriority.NO
         if not has_intro and self.last_outro_time > 0 and (self.time_elapsed_accounting_for_freeze(self.last_outro_time, intro_motion_freeze=True) < 4.5):
             return SwitchPriority.NO
         return super().get_switch_priority(current_char, has_intro, target_low_con)
@@ -105,9 +98,8 @@ class Phoebe(BaseChar):
 
     def _in_zani_liber_insert_window(self):
         """赞妮大招 phase2/3 落地即跑 insert 短轴（仅赞菲光——08-12 用户指令回退
-        非赞菲光 insert 轴；token 由赞妮满协奏 force 切菲比时发放）。"""
-        if self.team == 0:
-            self.decide_teammate()
+        非赞菲光 insert 轴；token 由赞妮满协奏 force 切菲比时发放）。
+        team 由 _select_perform_axis 统一刷新。"""
         if self.team != 1:
             return False
         zani = self.char_zani
@@ -130,7 +122,6 @@ class Phoebe(BaseChar):
             f'zanfei_guang={self._zanfei_guang} intro={self.has_intro} '
             f'star={self.star_available} charges={self.remaining_charges}'
         )
-        self._trace('axis-select', axis=axis)
         if axis == 'insert':
             return self._do_liber_insert()
         if axis == 'handoff':
@@ -141,8 +132,7 @@ class Phoebe(BaseChar):
         self.last_outro_time = -1
         start = time.time()
         self._trace('regular-prepare begin', intro=self.has_intro, star=self.star_available)
-        if self.team == 0:
-            self.decide_teammate()
+        # team 由 _select_perform_axis 统一刷新（team==0 → decide_teammate）
         # 进场动画 >0.4s：star 缓存时立即抢 R 会 no-effect；动画由告解蓝条等待兜底
         self._trace('regular-prepare input=sleep', duration=0.01)
         self.sleep(0.01)
@@ -270,7 +260,7 @@ class Phoebe(BaseChar):
             else:
                 if blue_required:
                     self._charge_starflash_until_full(
-                        stop_on_condition=False, finish_with_right_click=False, interval_click=True
+                        finish_with_right_click=False, interval_click=True
                     )
                     blue_ready = self.is_forte_full()
                 if blue_ready:
@@ -285,7 +275,7 @@ class Phoebe(BaseChar):
                     ):
                         if blue_required:
                             self._charge_starflash_until_full(
-                                stop_on_condition=False, finish_with_right_click=False, interval_click=True
+                                finish_with_right_click=False, interval_click=True
                             )
                             blue_ready = self.is_forte_full()
                         if blue_ready:
@@ -316,8 +306,7 @@ class Phoebe(BaseChar):
         切入动画；菲比大招留到 R2 后 do-perform 放）。非赞菲光不跑 insert 轴（用户
         08-12 指令回退——走常规轮转）。"""
         self.logger.info('phoebe: zani liber insert short axis')
-        if self.attribute == 0:
-            self.decide_teammate()
+        # team/attribute 由 _select_perform_axis 统一刷新（insert 轴仅赞菲光）
         # 贴脸切人短暂滞空：空中共鸣/大招 UI 变灰可由 down() 检测，零输入等落地再补 0.3s 稳定
         insert_start = time.time()
         self.task.wait_until(self.down, time_out=2.0)
@@ -352,7 +341,7 @@ class Phoebe(BaseChar):
         return clicked
 
     def _ensure_grounded(self, tag=''):
-        """Wait for airborne recovery only; ordinary insert grounding must not attack."""
+        """落地等待：滞空时 wait_down，仍飞则限时点击辅助落地（点击仅为落地，不构成输出）。"""
         if not self.flying():
             return
         self.wait_down()
@@ -361,19 +350,17 @@ class Phoebe(BaseChar):
             self.task.wait_until(lambda : not self.flying(), post_action=lambda : self.click(interval=0.1, after_sleep=0.05), time_out=2.0)
             self.wait_down()
 
-    def _hold_resonance_key_055(self):
+    def _hold_resonance_key(self, duration):
+        """长按共鸣键 duration 秒（next_frame 等待）。形态进入与 recovery 共用。"""
         key = self.get_resonance_key()
         self.task.send_key_down(key)
         hold_start = time.time()
-        while time.time() - hold_start < 0.55:
+        while time.time() - hold_start < duration:
             self.task.next_frame()
         self.task.send_key_up(key)
-        self.sleep(0.05)
 
     LIBER_HOLD_GRACE = 3.0
     LIBER_NO_EFFECT_HOLD = 2.0
-    LIBER_RESOLVE_TIMEOUT = 3.5
-    LIBER_SETTLE_TIMEOUT = 2.0
     LIBER_EXTENDED_CONFIRM = 1.0
 
     def _liber_pending(self):
@@ -421,7 +408,7 @@ class Phoebe(BaseChar):
         if self.liberation_available():
             if require_forte_retry:
                 self._charge_starflash_until_full(
-                    stop_on_condition=False, finish_with_right_click=False, interval_click=True
+                    finish_with_right_click=False, interval_click=True
                 )
                 if not self.is_forte_full():
                     self._trace('liberation retry skipped', tag=tag.strip(), reason='forte-not-ready')
@@ -486,8 +473,6 @@ class Phoebe(BaseChar):
                     if self._click_liberation_reliable(tag=' attack-con'):
                         self._record_liberation_cast()
                         continue
-            if time.time() >= end:
-                break
             if attacks == 0:
                 self._trace('concert-fill input=normal-attack')
             self.task.click()
@@ -548,7 +533,8 @@ class Phoebe(BaseChar):
             return False
         self.logger.info('phoebe: starflash recover long-press E + backstep')
         self._trace('starflash-recover input=long-E begin', hold=0.55)
-        self._hold_resonance_key_055()
+        self._hold_resonance_key(0.55)
+        self.sleep(0.05)
         self._trace('starflash-recover input=long-E end')
         self._trace('starflash-recover action=ensure-grounded begin')
         self._ensure_grounded('starflash recover')
@@ -564,21 +550,18 @@ class Phoebe(BaseChar):
                     finish_with_right_click=finish_with_right_click)
         return True
 
-    def _charge_starflash_until_full(self, stop_on_condition=True, finish_with_right_click=True,
-                                     interval_click=False):
+    def _charge_starflash_until_full(self, finish_with_right_click=True, interval_click=False):
         """左键单点直到重击图标亮，最多 5s；可选以右键完成星闪。
-        stop_on_condition 保留调用兼容；当前轮转均充至满，开始时刷新一次星色。
+        开始时刷新一次星色。
         finish_with_right_click=False 仅为赞菲光常规 Q 后 R 窗口充蓝，
         interval_click=True 时复用 R 确认期的节流左键；默认保留原星闪节奏。"""
         start = time.time()
-        check_forte = start
         self.check_middle_star()
-        condition = self.get_prayer_condition() if stop_on_condition else None
         recover_used = False
         recover_tried = False
         attacks = 0
-        self._trace('starflash-charge begin', stop_on_condition=stop_on_condition,
-                    forte=self.is_forte_full(), charges=self.remaining_charges)
+        self._trace('starflash-charge begin', forte=self.is_forte_full(),
+                    charges=self.remaining_charges)
         while not self.is_forte_full():
             if self.flying():
                 self._trace('starflash-charge action=auto-dodge-airborne')
@@ -601,15 +584,8 @@ class Phoebe(BaseChar):
                 self._trace('starflash-charge action=recover-E begin', elapsed=f'{elapsed:.2f}')
                 if self._starflash_recover_with_e(finish_with_right_click=finish_with_right_click):
                     recover_used = True
-                    check_forte = time.time()
                     self.task.next_frame()
                     continue
-            if condition is not None and time.time() - check_forte > 1:
-                if condition():
-                    self._trace('starflash-charge end', reason='condition', attacks=attacks,
-                                recover_used=recover_used)
-                    return recover_used
-                check_forte = time.time()
             self.check_combat()
             self.task.next_frame()
         if finish_with_right_click:
@@ -630,7 +606,7 @@ class Phoebe(BaseChar):
         recover_used = False
         # 充能=左键到变蓝：不做 condition 前置/中断（前置判断会掐断第 2 段充能）
         if not self.is_forte_full():
-            recover_used = self._charge_starflash_until_full(stop_on_condition=False)
+            recover_used = self._charge_starflash_until_full()
         if self.star_available:
             # 不做蓝条重进保护：识别失败与真退出无法区分，误判重进是闪避后发呆主源
             if self.is_forte_full():
@@ -683,13 +659,6 @@ class Phoebe(BaseChar):
         self.logger.debug(f'phoebe: confession_ready blue_percent {blue_percent:.3f}')
         return blue_percent > 0.15
 
-    def get_prayer_condition(self):
-        if not self.check_middle_star():
-            return self.is_forte_full
-        if self.confession_ready():
-            return self.confession_ready
-        return lambda: False
-
     def absolution_or_confession(self, dodge_cancel=True, wait_team=True):
         if wait_team:
             self.task.wait_in_team_and_world(time_out=3, raise_if_not_found=False)
@@ -697,11 +666,6 @@ class Phoebe(BaseChar):
         if charges is not None and charges > 0:
             self.star_available = True
             return State.SUCCESS
-        if self.attribute == 2:
-            key_down = lambda: self.task.send_key_down(self.get_resonance_key())
-            key_up = lambda: self.task.send_key_up(self.get_resonance_key())
-        else:
-            key_down, key_up = (self.task.mouse_down, self.task.mouse_up)
         # 两态资源：正数直接复用，0 无条件固定长按补满。
         self.logger.info(f'phoebe: entry begin charges={charges} att={self.attribute}')
         # 固定长按 1.2s：is_forte_full 双语义（star_available 时=重击图标找图）——
@@ -709,9 +673,13 @@ class Phoebe(BaseChar):
         # 1.2s 固定按住保证游戏长按判定（短按=定身+传送）；切辅助/恢复充能均在按住期间完成
         hold_started_at = time.time()
         self.logger.info('phoebe: entry hold-start')
-        key_down()
-        self.sleep(1.2)
-        key_up()
+        if self.attribute == 2:
+            # E 长按复用共享原语（next_frame 等待，与 recovery 长按一致）
+            self._hold_resonance_key(1.2)
+        else:
+            self.task.mouse_down()
+            self.sleep(1.2)
+            self.task.mouse_up()
         self.logger.info(f'phoebe: entry hold-release elapsed={time.time() - hold_started_at:.2f}s')
         if self.flying():
             self.logger.info('phoebe: entry airborne-after-hold')
@@ -737,17 +705,13 @@ class Phoebe(BaseChar):
         self.state['enter_status'] += 1
         return State.SUCCESS
 
-    def _prepare_exit(self, full_tail):
-        """切人出口不再尝试 R；R 只属于 Q、星闪或补资源窗口。"""
-        self._trace('switch prepare-exit', full_tail=full_tail,
-                    liberation=bool(self.state.get('priority_liberation_cast')))
-        return False
-
     def switch_next_char(self, *args, **kwargs):
         full_tail = bool(kwargs.pop('_zanfei_full_tail', False))
         con_ready = bool(kwargs.pop('_zanfei_con_ready', False))
         self._trace('switch begin', full_tail=full_tail, con_ready=con_ready)
-        self._prepare_exit(full_tail)
+        # 切人出口不再尝试 R；R 只属于 Q、星闪或补资源窗口
+        self._trace('switch prepare-exit', full_tail=full_tail,
+                    liberation=bool(self.state.get('priority_liberation_cast')))
         # >=1.0 兑底：视觉满（含超采样）才切，视觉 98-99% 不切（继续补协奏）；
         # get_current_con() 才更新字段——直接读字段恒为 0（进场重置后从不采样）
         # 队里有 Zani 时 full-con 必须切回（unbuffed_support 优先会切奶妈）
@@ -759,9 +723,8 @@ class Phoebe(BaseChar):
             self._trace('switch input=echo-Q-outro')
             self.click_echo()
             self.state['outro'] += 1
-            if self.team in (1, 2):
-                self._trace('switch input=force-zani')
-                return self._zanfei_switch_on_full_con()
+            self._trace('switch input=force-zani')
+            return self._zanfei_switch_on_full_con()
         self._trace('switch input=base-selector')
         return super().switch_next_char(*args, **kwargs)
 
