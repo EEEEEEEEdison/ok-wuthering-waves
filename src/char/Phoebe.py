@@ -49,9 +49,6 @@ class Phoebe(BaseChar):
         self._rover_form_pending = False
         self._zanfei_guang = False
         self._force_switch_me = False
-        self._shou_full_tail_pending = False
-        self._shou_full_tail_pending_at = 0
-        self._shou_full_tail_force = False
         self._invalidate_form_charges()
         self.state = dict(self.PHOEBE_BASE_STATE)
 
@@ -127,14 +124,6 @@ class Phoebe(BaseChar):
             'perform-begin', attribute=self.attribute, intro=self.has_intro,
             star=self.star_available, charges=self.remaining_charges,
         )
-        if self._shou_full_tail_pending:
-            self._trace('axis=pending-tail begin')
-            if not self._ensure_shou_full_tail():
-                self._trace('axis=pending-tail result=pending')
-                return None
-            self._shou_full_tail_pending = False
-            self._trace('axis=pending-tail input=switch')
-            return self.switch_next_char(_zanfei_shou_full_tail=True)
         axis = self._select_perform_axis()
         self.logger.info(
             f'phoebe: axis={axis} team={self.team} attribute={self.attribute} '
@@ -241,7 +230,6 @@ class Phoebe(BaseChar):
         self._trace('regular-finish input=switch', con_ready=con_ready)
         return self.switch_next_char(
             _zanfei_full_tail=self.team == 1,
-            _zanfei_shou_full_tail=self.team == 2,
             _zanfei_con_ready=con_ready,
         )
 
@@ -626,7 +614,11 @@ class Phoebe(BaseChar):
             self.task.next_frame()
         if finish_with_right_click:
             self._trace('starflash-charge input=right-click', duration=0.05, attacks=attacks)
-            self.continues_right_click(0.05)
+            # 收尾右键=闪避。不用 continues_right_click(0.05)：其内部 click(interval=0.1)
+            # 会被 check_interval 节流吞掉（距上次普攻 <0.1s → 不发出且 reset_scene 清帧），
+            # 导致 starflash_combo 重击门前被迫现场截图拍到普攻尾帧 → 图标未亮 → 静默 not-cast。
+            # 直接 task.click(key='right') 不节流：右键一定发出且保留已亮的旧帧。
+            self.task.click(key='right')
         self._trace('starflash-charge end', reason='forte-ready', attacks=attacks,
                     recover_used=recover_used, finish_with_right_click=finish_with_right_click)
         return recover_used
@@ -742,53 +734,8 @@ class Phoebe(BaseChar):
         self.star_available = True
         self.reset_action(new_rotation=False)
         self._refill_form_charges()
-        self._shou_full_tail_pending = False
-        self._shou_full_tail_force = False
         self.state['enter_status'] += 1
         return State.SUCCESS
-
-    def _ensure_shou_full_tail(self):
-        """Complete the authoritative Shou regular tail before allowing a switch."""
-        if self.team != 2:
-            return True
-        # 防 pending 死锁：R 释放失败无限重试会卡死战斗（in_combat 永真）；pending 超 15s 放弃强制切人
-        if self._shou_full_tail_pending and time.time() - self._shou_full_tail_pending_at > 15.0:
-            self.logger.info('phoebe: shou full-tail timeout 15s, force switch')
-            self._shou_full_tail_pending = False
-            self._shou_full_tail_force = True
-            return True
-
-        if not self.state.get('priority_liberation_cast') and self.star_available and (not self.flying()) and self.liberation_available():
-            if self._click_liberation_reliable(tag=' finish-wait'):
-                self._record_liberation_cast()
-
-        for _ in range(2):
-            if self.state.get('starflash_combo', 0) >= 2:
-                break
-            before = self.state.get('starflash_combo', 0)
-            self.starflash_combo()
-            if self.state.get('starflash_combo', 0) <= before:
-                break
-
-        if not self.state.get('priority_liberation_cast'):
-            # 有界等 R（5s——能量不足时普攻攒能；不恢复直接切——保战斗不卡死）
-            end_wait = time.time() + 5.0
-            while time.time() < end_wait:
-                if self.star_available and (not self.flying()) and self.liberation_available():
-                    if self._click_liberation_reliable(tag=' finish-wait'):
-                        self._record_liberation_cast()
-                if self.state.get('priority_liberation_cast'):
-                    break
-                self.click()
-                self.task.next_frame()
-            if not self.state.get('priority_liberation_cast'):
-                self.logger.info('phoebe: shou full-tail R unavailable 5s, force switch')
-                self._shou_full_tail_force = True
-                return True
-
-        liberation_done = bool(self.state.get('priority_liberation_cast'))
-        starflash_done = self.state.get('starflash_combo', 0) >= 2
-        return liberation_done and starflash_done
 
     def _prepare_exit(self, full_tail):
         """切人出口不再尝试 R；R 只属于 Q、星闪或补资源窗口。"""
@@ -798,18 +745,9 @@ class Phoebe(BaseChar):
 
     def switch_next_char(self, *args, **kwargs):
         full_tail = bool(kwargs.pop('_zanfei_full_tail', False))
-        shou_full_tail = bool(kwargs.pop('_zanfei_shou_full_tail', False))
         con_ready = bool(kwargs.pop('_zanfei_con_ready', False))
-        self._trace('switch begin', full_tail=full_tail, shou_tail=shou_full_tail,
-                    con_ready=con_ready)
+        self._trace('switch begin', full_tail=full_tail, con_ready=con_ready)
         self._prepare_exit(full_tail)
-        if shou_full_tail and not self._shou_full_tail_force and not self._ensure_shou_full_tail():
-            self._shou_full_tail_pending = True
-            self._shou_full_tail_pending_at = time.time()
-            self._trace('switch result=pending-shou-tail')
-            return None
-        self._shou_full_tail_pending = False
-        self._shou_full_tail_force = False
         # >=1.0 兑底：视觉满（含超采样）才切，视觉 98-99% 不切（继续补协奏）；
         # get_current_con() 才更新字段——直接读字段恒为 0（进场重置后从不采样）
         # 队里有 Zani 时 full-con 必须切回（unbuffed_support 优先会切奶妈）
