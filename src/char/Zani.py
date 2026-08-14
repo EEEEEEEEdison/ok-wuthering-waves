@@ -52,15 +52,7 @@ class Zani(BaseChar):
     def _force_switch_to(self, target):
         if target is None:
             return super().switch_next_char()
-        for char in self.task.chars:
-            if char is not None:
-                char._force_switch_me = char is target
-        try:
-            return super().switch_next_char()
-        finally:
-            for char in self.task.chars:
-                if char is not None:
-                    char._force_switch_me = False
+        return self.task.switch_next_char(self, force_target=target)
 
     def switch_next_char(self, *args, **kwargs):
         # 仅赞菲守（无 Rover）需要 force 切回菲比；赞菲光走 runtime 默认

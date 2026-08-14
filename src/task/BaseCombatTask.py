@@ -520,11 +520,15 @@ class BaseCombatTask(CombatCheck):
 
         return self._switch_rule_3_target(candidates)
 
-    def _choose_switch_target(self, current_char, has_intro, target_low_con=False):
+    def _choose_switch_target(self, current_char, has_intro, target_low_con=False, force_target=None):
         candidates = [
             char for char in self.chars
             if char is not None and char != current_char
         ]
+        if force_target is not None:
+            if force_target in candidates:
+                return self._log_switch_choice(current_char, force_target, has_intro, 'explicit_force_target')
+            return self._log_switch_choice(current_char, current_char, has_intro, 'explicit_force_target_unavailable')
         if not candidates:
             return current_char
 
@@ -574,7 +578,7 @@ class BaseCombatTask(CombatCheck):
         switch_to.has_intro = has_intro
         switch_to.has_sub_dps_intro = has_intro and current_char.is_sub_dps
 
-    def switch_next_char(self, current_char, post_action=None, free_intro=False, target_low_con=False):
+    def switch_next_char(self, current_char, post_action=None, free_intro=False, target_low_con=False, force_target=None):
         """切换到下一个最优角色。
 
         Args:
@@ -582,6 +586,7 @@ class BaseCombatTask(CombatCheck):
             post_action (callable, optional): 切换后执行的动作 (回调函数)。默认为 None。
             free_intro (bool, optional): 是否强制认为拥有入场技 (通常在协奏值满时)。默认为 False。
             target_low_con (bool, optional): 是否优先切换到协奏值较低的角色。默认为 False。
+            force_target (BaseChar, optional): 显式指定切换目标；保持旧强制切换语义，跳过普通优先级和冷却筛选。
         """
         has_intro = free_intro
         current_con = 0
@@ -596,7 +601,9 @@ class BaseCombatTask(CombatCheck):
             if current_con == 1:
                 has_intro = True
 
-        switch_to = self._choose_switch_target(current_char, has_intro, target_low_con=target_low_con)
+        switch_to = self._choose_switch_target(
+            current_char, has_intro, target_low_con=target_low_con, force_target=force_target
+        )
         if not switch_to or switch_to == current_char:
             logger.warning(f"{current_char} can't find next char to switch to, performing too fast add a normal attack")
             current_char.continues_normal_attack(0.2)
@@ -621,8 +628,9 @@ class BaseCombatTask(CombatCheck):
                 refreshed_has_intro = has_intro or current_char.is_con_full()
                 if refreshed_has_intro != has_intro:
                     has_intro = refreshed_has_intro
-                    switch_to = self._choose_switch_target(current_char, has_intro,
-                                                           target_low_con=target_low_con)
+                    switch_to = self._choose_switch_target(
+                        current_char, has_intro, target_low_con=target_low_con, force_target=force_target
+                    )
                     if not switch_to or switch_to == current_char:
                         logger.warning(
                             f"{current_char} can't find next char to switch to after intro refresh, "
