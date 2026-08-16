@@ -661,7 +661,7 @@ class Zani(BaseChar):
                 return SwitchPriority.NO
         if self.in_liberation:
             return SwitchPriority.MUST
-        if not self._zanfei_guang and has_intro:
+        if not self._zanfei_guang and self.char_phoebe is not None and has_intro:
             from src.char.Phoebe import Phoebe
             if not isinstance(current_char, Phoebe):
                 self.logger.info(f'zani: reject intro source current={type(current_char).__name__} expected=Phoebe')
