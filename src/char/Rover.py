@@ -133,8 +133,6 @@ class Rover(BaseChar):
             self.last_buff_time = time.time()
             self.logger.info(f'rover: insert buff refreshed buff_time={self.buff_time}')
         self.logger.info('rover: insert switch-to-zani')
-        from src.char.Zani import Zani
-        zani = self.task.has_char(Zani)
         return super().switch_next_char()
 
     def init(self):

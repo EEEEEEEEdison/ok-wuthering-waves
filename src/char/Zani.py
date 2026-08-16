@@ -617,7 +617,7 @@ class Zani(BaseChar):
         )
         self._rover_form_pending = self.char_rover is not None and rover_form < 0
         self._zanfei_guang = bool(self.char_phoebe and self.char_rover)
-        if self._zanfei_guang:
+        if self._zanfei_guang and self.char_rover is not None:
             self.char_rover.set_char_type(CharType.SUB_DPS)
             self.char_rover.set_buff_time(14)
             self.logger.info(

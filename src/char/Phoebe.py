@@ -13,6 +13,7 @@ class Phoebe(BaseChar):
 
     PHOEBE_BASE_STATE = {'enter_status': 0, 'starflash_combo': 0, 'liberation': 0, 'outro': 0, 'priority_liberation_cast': 0}
     FORM_CHARGE_CAPACITY = {1: 4, 2: 2}
+    CONCERT_FILL_END = 'concert-fill end'
 
     def _invalidate_form_charges(self):
         self.remaining_charges = 0
@@ -167,11 +168,11 @@ class Phoebe(BaseChar):
             and self.star_available
             and not self.flying()
             and self.liberation_available()
+            and self._click_liberation_reliable(tag=f' {tag}')
         ):
-            if self._click_liberation_reliable(tag=f' {tag}'):
-                self._record_liberation_cast()
-                self._trace('starflash liberation-window result=cast', tag=tag)
-                return True
+            self._record_liberation_cast()
+            self._trace('starflash liberation-window result=cast', tag=tag)
+            return True
         return False
 
     def _run_starflash_budget(self, status_entered):
@@ -442,7 +443,7 @@ class Phoebe(BaseChar):
         while time.time() < end:
             if hasattr(self.task, 'in_combat') and not self.task.in_combat():
                 combat_ended = True
-                self._trace('concert-fill end', reason='out-of-combat', attacks=attacks)
+                self._trace(self.CONCERT_FILL_END, reason='out-of-combat', attacks=attacks)
                 break
             current_con = self.get_current_con()
             con_full = current_con >= 1.0
@@ -455,24 +456,23 @@ class Phoebe(BaseChar):
                     self._trace('concert-fill exit-condition-met', con=f'{current_con:.3f}', forte=forte_ready)
                 # 留守：大招仍 pending 可取/在恢复期且未超 LIBER_HOLD_GRACE
                 if not (check_liber and self._liber_pending()):
-                    self._trace('concert-fill end', reason='exit-ready', attacks=attacks)
+                    self._trace(self.CONCERT_FILL_END, reason='exit-ready', attacks=attacks)
                     break
                 if time.time() - con_full_since >= self.LIBER_HOLD_GRACE:
-                    self._trace('concert-fill end', reason='liber-grace-expired', attacks=attacks)
+                    self._trace(self.CONCERT_FILL_END, reason='liber-grace-expired', attacks=attacks)
                     break
                 if not (self.liberation_available() or self._recent_liber_no_effect()):
-                    self._trace('concert-fill end', reason='liber-unavailable', attacks=attacks)
+                    self._trace(self.CONCERT_FILL_END, reason='liber-unavailable', attacks=attacks)
                     break
             else:
                 con_full_since = None
             if check_liber and not self.state.get('priority_liberation_cast') and self.star_available and (not self.flying()) and (
-                self.liberation_available() or self._recent_liber_no_effect()
+                self.liberation_available()
             ):
-                if self.liberation_available():
-                    self._trace('concert-fill action=liberation', attacks=attacks)
-                    if self._click_liberation_reliable(tag=' attack-con'):
-                        self._record_liberation_cast()
-                        continue
+                self._trace('concert-fill action=liberation', attacks=attacks)
+                if self._click_liberation_reliable(tag=' attack-con'):
+                    self._record_liberation_cast()
+                    continue
             if attacks == 0:
                 self._trace('concert-fill input=normal-attack')
             self.task.click()
@@ -480,9 +480,9 @@ class Phoebe(BaseChar):
             self.sleep(interval)
         if not combat_ended and hasattr(self.task, 'in_combat') and not self.task.in_combat():
             combat_ended = True
-            self._trace('concert-fill end', reason='out-of-combat', attacks=attacks)
+            self._trace(self.CONCERT_FILL_END, reason='out-of-combat', attacks=attacks)
         elif time.time() >= end and not exit_ready_seen:
-            self._trace('concert-fill end', reason='timeout', attacks=attacks)
+            self._trace(self.CONCERT_FILL_END, reason='timeout', attacks=attacks)
         return None if combat_ended else exit_ready_seen
 
     def _ensure_first_rotation_con(self):
