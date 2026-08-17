@@ -75,10 +75,10 @@ class Phoebe(BaseChar):
         self.logger.info(f'phoebe: trace {event}' + (f' {fields}' if fields else ''))
 
     def _select_perform_axis(self):
-        """Token Insert 优先；无 token 的赞妮大招回切才走 handoff。"""
+        """Token Insert 优先；无 token 的赞妮大招回切才走 handoff（赞菲光）。"""
         if self.team == 0 or self._rover_form_pending:
             self.decide_teammate()
-        if self.team == 1 and self._in_zani_liber_insert_window():
+        if self._in_zani_liber_insert_window():
             return 'insert'
         zani_liberating = self.char_zani is not None and self.char_zani.get_state() == 1
         return 'handoff' if zani_liberating else 'regular'
@@ -98,11 +98,9 @@ class Phoebe(BaseChar):
         return self._force_switch_to(self.char_zani)
 
     def _in_zani_liber_insert_window(self):
-        """赞妮大招 phase2/3 落地即跑 insert 短轴（仅赞菲光——08-12 用户指令回退
-        非赞菲光 insert 轴；token 由赞妮满协奏 force 切菲比时发放）。
+        """赞妮大招 phase2/3 落地即跑 insert 短轴。赞菲光：token 命中才进（starflash+定身+切回）；
+        赞菲奶：赞妮大招中即进（只定身+切回，无 token 需求）。
         team 由 _select_perform_axis 统一刷新。"""
-        if self.team != 1:
-            return False
         zani = self.char_zani
         if zani is None:
             from src.char.Zani import Zani
@@ -110,7 +108,12 @@ class Phoebe(BaseChar):
             self.char_zani = zani
         if zani is None:
             return False
-        return bool(zani.try_consume_insert_handoff())
+        if self.team == 1:
+            return bool(zani.try_consume_insert_handoff())
+        if self.team == 2:
+            # 赞菲奶：赞妮大招中即进 insert（无 token；进场即定身一次再切回）
+            return zani.get_state() == 1
+        return False
 
     def do_perform(self):
         self._trace(
@@ -288,8 +291,8 @@ class Phoebe(BaseChar):
                                 self._trace('regular action=liberation retry-result', result='cast')
                 elif blue_required:
                     self._trace('regular action=liberation skipped', reason='forte-not-ready')
-        # E 定身（所有 starflash 前——非赞菲光每轮/赞菲光首轮）：短按 E 镜之环 2s 定怪方便重击，不会误进告解
-        if self.attribute == 2 and (self.team != 1 or not self.first_rotation_done):
+        # E 定身（所有 starflash 前——仅首轮）：短按 E 镜之环 2s 定怪方便重击，不会误进告解
+        if self.attribute == 2 and not self.first_rotation_done:
             self._trace('regular input=short-E-control begin')
             self.click_resonance(send_click=False, time_out=0.5, click_f=False)
             self._trace('regular input=short-E-control sleep', duration=0.3)
@@ -301,23 +304,40 @@ class Phoebe(BaseChar):
         return self._finish_regular_rotation()
 
     def _do_liber_insert(self):
-        """赞妮大招插入（仅赞菲光）：切入后立即 starflash 蓄力重击（图标亮直接打，
-        不亮由充能段左键凑图标——给赞妮回能量）→ 短按 E 定身（重击后切回前定住怪，
-        效果覆盖赞妮进场）→ 切回。不做告解/开大等前置（蓄力与长按动作时长本身覆盖
-        切入动画；菲比大招留到 R2 后 do-perform 放）。非赞菲光不跑 insert 轴（用户
-        08-12 指令回退——走常规轮转）。"""
+        """赞妮大招插入：切入后立即 starflash 蓄力重击（图标亮直接打，不亮由充能段
+        左键凑图标——给赞妮回能量）→ 短按 E 定身（重击后切回前定住怪，效果覆盖
+        赞妮进场）→ 切回。赞菲奶简版：只放一个定身便交还赞妮（不 starflash/不补资源）。
+        不做告解/开大等前置（蓄力与长按动作时长本身覆盖切入动画；菲比大招留到
+        R2 后 do-perform 放）。"""
         self.logger.info('phoebe: zani liber insert short axis')
-        # team/attribute 由 _select_perform_axis 统一刷新（insert 轴仅赞菲光）
+        # team/attribute 由 _select_perform_axis 统一刷新（赞菲光 token / 赞菲奶大招中）
         # 贴脸切人短暂滞空：空中共鸣/大招 UI 变灰可由 down() 检测，零输入等落地再补 0.3s 稳定
         insert_start = time.time()
         self.task.wait_until(self.down, time_out=2.0)
         self.sleep(0.3)
         self.logger.info(f'phoebe: insert grounded wait elapsed={time.time() - insert_start:.2f}s')
-        # 无条件调 starflash_combo：能直接重击就打，不能则充能段左键凑图标
-        self.starflash_combo()
-        self._ensure_grounded('insert after heavy')
-        # 定身在 starflash 后：重击后切回前定住怪，效果覆盖赞妮进场（约 0.3s 生效）
-        self._insert_control_e()
+        if self.team == 2:
+            # 赞菲奶 insert 简版：等变奏入场动画剩余预算（down 图标可用≠动画解锁，
+            # 动画期中短按 E 会被游戏吞掉——G1 同根），再放一个定身（镜之环短按 E）交还赞妮
+            budget_remaining = 0.0
+            budget_applied = False
+            if self.last_switch_in_time > 0:
+                remaining = self.intro_motion_freeze_duration - (time.time() - self.last_switch_in_time)
+                if remaining > 0:
+                    budget_remaining = remaining
+                    budget_applied = True
+                    self.sleep(remaining, check_combat=False)
+            self.logger.info(
+                f'phoebe: insert intro-budget remaining={budget_remaining:.2f} '
+                f'applied={budget_applied}'
+            )
+            self._insert_control_e()
+        else:
+            # 无条件调 starflash_combo：能直接重击就打，不能则充能段左键凑图标
+            self.starflash_combo()
+            self._ensure_grounded('insert after heavy')
+            # 定身在 starflash 后：重击后切回前定住怪，效果覆盖赞妮进场（约 0.3s 生效）
+            self._insert_control_e()
         self._ensure_grounded('insert before switch')
         if self.buff_time > 0:
             self.last_buff_time = time.time()
@@ -467,12 +487,13 @@ class Phoebe(BaseChar):
             else:
                 con_full_since = None
             if check_liber and not self.state.get('priority_liberation_cast') and self.star_available and (not self.flying()) and (
-                self.liberation_available()
+                self.liberation_available() or self._recent_liber_no_effect()
             ):
-                self._trace('concert-fill action=liberation', attacks=attacks)
-                if self._click_liberation_reliable(tag=' attack-con'):
-                    self._record_liberation_cast()
-                    continue
+                if self.liberation_available():
+                    self._trace('concert-fill action=liberation', attacks=attacks)
+                    if self._click_liberation_reliable(tag=' attack-con'):
+                        self._record_liberation_cast()
+                        continue
             if attacks == 0:
                 self._trace('concert-fill input=normal-attack')
             self.task.click()
@@ -573,7 +594,9 @@ class Phoebe(BaseChar):
             elapsed = time.time() - start
             if elapsed > 5:
                 self._trace('starflash-charge end', reason='timeout', attacks=attacks,
-                            recover_used=recover_used)
+                            recover_used=recover_used,
+                            in_combat=hasattr(self.task, 'in_combat') and self.task.in_combat(),
+                            forte=self.is_forte_full())
                 return recover_used
             if (
                 not recover_tried
