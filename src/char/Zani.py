@@ -268,8 +268,17 @@ class Zani(BaseChar):
             self.nightfall_combo()
             return self._handoff_liber_insert(3)
         if self._liber_phase == 3:
-            self.logger.info('zanfei liber phase3: stay until R2')
-            return self._run_phase_three_liberation()
+            self.logger.info('zanfei liber phase3: direct R2 (no recast nightfall)')
+            # P#(2026-08-17, user-ordered): team1 phase3 must NOT recast nightfall.
+            # phase2 already cast the nightfall segment; re-casting it here rewrites
+            # nightfall_time so smash-guard waits ~2s for a fresh smash to land
+            # (live 14:56:48 wait=2.06). Team1 must match team2: switch back to Zani
+            # then go straight to R2.
+            if self.should_end_liberation():
+                return self._complete_liberation_to_phoebe(phase=0)
+            # 即便 gate 未过也直接收尾：phase2 夜闪已打出多秒，R2 延后收益不及
+            # 交还节奏；smash-guard 防吞主要作用于 phase2 出口已处理的下砸。
+            return self._complete_liberation_to_phoebe(phase=0)
         if self.should_end_liberation():
             return self._complete_liberation_to_phoebe(phase=0)
         self.nightfall_combo()
@@ -693,7 +702,7 @@ class Zani(BaseChar):
         )
         self._rover_form_pending = self.char_rover is not None and rover_form < 0
         self._zanfei_guang = bool(self.char_phoebe and self.char_rover)
-        if self._zanfei_guang:
+        if self._zanfei_guang and self.char_rover is not None:
             self.char_rover.set_char_type(CharType.SUB_DPS)
             self.char_rover.set_buff_time(14)
             self.logger.info(
