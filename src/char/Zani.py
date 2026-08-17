@@ -240,6 +240,15 @@ class Zani(BaseChar):
         if self.should_end_liberation():
             return self._complete_liberation_to_phoebe()
         self.nightfall_combo()
+        if self._zanfei_guang:
+            self.check_liber()
+            if not self.in_liberation:
+                self._liber_phase = 0
+                return self._switch_to_phoebe_full()
+            if self.should_end_liberation(force_finish=True):
+                return self._complete_liberation_to_phoebe()
+            self._liber_phase = 0
+            return self.switch_next_char()
         while self.in_liberation and self._liber_phase == 3:
             if self.should_end_liberation():
                 return self._complete_liberation_to_phoebe()
@@ -433,10 +442,39 @@ class Zani(BaseChar):
         self.logger.info(f'zani: trace liber2 end reason=target-detected total={current - start:.2f}s cast={current - cast_started_at if cast_started_at is not None else 0:.2f}s inputs={inputs} confirmed={confirmed}')
         return confirmed
 
-    def should_end_liberation(self, time_only=False):
+    def should_end_liberation(self, time_only=False, force_finish=False):
         start = time.time()
         left = self.liberation_time_left()
         mode = 'time-only' if time_only else 'full'
+        smash_left = 0.0
+        raw_elapsed = -1.0
+        if not time_only and self._liber_phase == 3 and self.nightfall_time > 0:
+            raw_elapsed = time.time() - self.nightfall_time
+            if raw_elapsed < 2.2 + 3.0:
+                smash_left = self.nightfall_time_left()
+
+        # team1 phase3 calls this only after declining another nightfall.  A fresh
+        # smash has already been launched, so settle it completely before R2;
+        # otherwise direct R2 is safe because no fresh smash exists.
+        if force_finish:
+            if smash_left > 0.12:
+                wait = smash_left - 0.12
+                self.logger.info(
+                    f'zani: r2-gate smash-guard phase={self._liber_phase} '
+                    f'smash_left={smash_left:.2f} raw_elapsed={raw_elapsed:.2f} '
+                    f'wait={wait:.2f} forced=True left_before={left:.2f}'
+                )
+                self.sleep(wait, check_combat=False)
+                self.check_liber()
+                if not self.in_liberation:
+                    return False
+            self.logger.info(
+                f'zani: r2-gate result=end reason=forced-smash-cleared '
+                f'phase={self._liber_phase} smash_left={smash_left:.2f} '
+                f'left={left:.2f} elapsed={time.time() - start:.2f}'
+            )
+            return True
+
         if left < 1.0:
             self.logger.info(
                 f'zani: r2-gate result=end reason=time-left mode={mode} '
@@ -446,6 +484,28 @@ class Zani(BaseChar):
             return True
         if time_only:
             return False
+
+        # team1 owns phase3 continuation.  Let the existing loop decide whether
+        # another nightfall fits; after each fresh smash, settle before reevaluating.
+        if self._zanfei_guang and self._liber_phase == 3:
+            if smash_left > 0.12:
+                wait = smash_left - 0.12
+                self.logger.info(
+                    f'zani: r2-gate smash-guard phase={self._liber_phase} '
+                    f'smash_left={smash_left:.2f} raw_elapsed={raw_elapsed:.2f} '
+                    f'wait={wait:.2f} forced=False left_before={left:.2f}'
+                )
+                self.sleep(wait, check_combat=False)
+                self.check_liber()
+                if not self.in_liberation:
+                    return False
+                self.logger.info(
+                    f'zani: r2-gate result=continue reason=smash-settled '
+                    f'phase={self._liber_phase} smash_left={smash_left:.2f} '
+                    f'left={left:.2f} elapsed={time.time() - start:.2f}'
+                )
+            return False
+
         if self.is_nightfall_ready():
             self.logger.info(
                 f'zani: r2-gate result=continue reason=nightfall-ready left={left:.2f} '
@@ -464,33 +524,19 @@ class Zani(BaseChar):
                     f'elapsed={time.time() - start:.2f}'
                 )
                 return False
-            # 下砸窗口守卫（取代 1s forte 站桩）：最后一次 nightfall 的下砸动画
-            # 未结束（2.2s 窗口）前不得 R2。freeze-adjusted 窗口与动画同步暂停；
-            # raw 墙钟 >= 窗口+3.0s（U0 实测 freeze 累积上限 0-2.94s）时窗口必已过，
-            # 防 freeze-adjusted 长期为正导致白等。
-            smash_left = 0.0
-            if self.nightfall_time > 0:
-                raw_elapsed = time.time() - self.nightfall_time
-                if raw_elapsed < 2.2 + 3.0:
-                    smash_left = self.nightfall_time_left()
-            # 固定等待实验（2026-08-18，用户授权）：不再按 smash_left 或 left 预算
-            # 缩短等待，统一等 1.4s，验证末段 R2 是否仍能 confirmed。保留 before/after
-            # left 日志；若 R2 超时或未确认，回退为动态预算。
+            # team2 retains the established bounded dynamic guard.  Team1's
+            # phase3 path returns above and settles fresh smash before its next
+            # admission decision, preventing R2 from interrupting the down-smash.
             if smash_left > 0.12:
                 wait = 1.4
                 self.logger.info(
                     f'zani: r2-gate smash-guard phase={self._liber_phase} '
                     f'smash_left={smash_left:.2f} '
-                    f'raw_elapsed={raw_elapsed:.2f} wait={wait:.2f} fixed=True '
+                    f'raw_elapsed={raw_elapsed:.2f} wait={wait:.2f} '
                     f'left_before={left:.2f}'
                 )
                 self.sleep(wait, check_combat=False)
                 self.check_liber()
-                left_after = self.liberation_time_left()
-                self.logger.info(
-                    f'zani: r2-gate smash-guard result=wait-finished fixed=True '
-                    f'left_after={left_after:.2f} in_liberation={self.in_liberation}'
-                )
                 if not self.in_liberation:
                     return False
             self.logger.info(
