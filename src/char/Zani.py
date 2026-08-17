@@ -268,17 +268,13 @@ class Zani(BaseChar):
             self.nightfall_combo()
             return self._handoff_liber_insert(3)
         if self._liber_phase == 3:
-            self.logger.info('zanfei liber phase3: direct R2 (no recast nightfall)')
-            # P#(2026-08-17, user-ordered): team1 phase3 must NOT recast nightfall.
-            # phase2 already cast the nightfall segment; re-casting it here rewrites
-            # nightfall_time so smash-guard waits ~2s for a fresh smash to land
-            # (live 14:56:48 wait=2.06). Team1 must match team2: switch back to Zani
-            # then go straight to R2.
-            if self.should_end_liberation():
-                return self._complete_liberation_to_phoebe(phase=0)
-            # 即便 gate 未过也直接收尾：phase2 夜闪已打出多秒，R2 延后收益不及
-            # 交还节奏；smash-guard 防吞主要作用于 phase2 出口已处理的下砸。
-            return self._complete_liberation_to_phoebe(phase=0)
+            self.logger.info('zanfei liber phase3: stay until R2')
+            # P#(2026-08-17, v2): direct-R2 was wrong (live 15:31:08 left=9.35 R2
+            # wasting the remaining damage window). team1 phase3 must keep casting
+            # nightfall exactly like team2; the smash-guard wait inside
+            # should_end_liberation is capped at 1.4s so the return-to-Zani -> R2
+            # gap stays short while the last smash still lands (~1.1s settle).
+            return self._run_phase_three_liberation()
         if self.should_end_liberation():
             return self._complete_liberation_to_phoebe(phase=0)
         self.nightfall_combo()
@@ -477,8 +473,15 @@ class Zani(BaseChar):
                 raw_elapsed = time.time() - self.nightfall_time
                 if raw_elapsed < 2.2 + 3.0:
                     smash_left = self.nightfall_time_left()
+            # 下砸窗口守卫（2026-08-18 实测修正）：team1/team2 统一等待。
+            # 删等待实测 100% 吞最后一段夜闪下砸（live 16:33:56 smash_left=2.18
+            # raw_elapsed=0.02 wait=0.00 直接 R2 -> 下砸被吞）；赞菲奶“快”只是
+            # 因为它的 phase3 夜闪是 phase2 打的（隔切奶开大 ~3s），残余窗口
+            # 已短（如 raw=2.19 -> smash_left=0.91 wait=0.79）。两者都需要等
+            # 下砸落地，差异仅是残余窗口长短。wait 上限 1.4s 保持回场->R2
+            # 节奏，0.12s 尾段 + left-1.3 预算防超时。
             if smash_left > 0.12:
-                wait = min(smash_left - 0.12, max(left - 1.3, 0))
+                wait = min(smash_left - 0.12, max(left - 1.3, 0), 1.4)
                 if wait > 0:
                     self.logger.info(
                         f'zani: r2-gate smash-guard phase={self._liber_phase} '
