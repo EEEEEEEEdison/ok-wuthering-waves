@@ -473,25 +473,26 @@ class Zani(BaseChar):
                 raw_elapsed = time.time() - self.nightfall_time
                 if raw_elapsed < 2.2 + 3.0:
                     smash_left = self.nightfall_time_left()
-            # 下砸窗口守卫（2026-08-18 实测修正）：team1/team2 统一等待。
-            # 删等待实测 100% 吞最后一段夜闪下砸（live 16:33:56 smash_left=2.18
-            # raw_elapsed=0.02 wait=0.00 直接 R2 -> 下砸被吞）；赞菲奶“快”只是
-            # 因为它的 phase3 夜闪是 phase2 打的（隔切奶开大 ~3s），残余窗口
-            # 已短（如 raw=2.19 -> smash_left=0.91 wait=0.79）。两者都需要等
-            # 下砸落地，差异仅是残余窗口长短。wait 上限 1.4s 保持回场->R2
-            # 节奏，0.12s 尾段 + left-1.3 预算防超时。
+            # 固定等待实验（2026-08-18，用户授权）：不再按 smash_left 或 left 预算
+            # 缩短等待，统一等 1.4s，验证末段 R2 是否仍能 confirmed。保留 before/after
+            # left 日志；若 R2 超时或未确认，回退为动态预算。
             if smash_left > 0.12:
-                wait = min(smash_left - 0.12, max(left - 1.3, 0), 1.4)
-                if wait > 0:
-                    self.logger.info(
-                        f'zani: r2-gate smash-guard phase={self._liber_phase} '
-                        f'smash_left={smash_left:.2f} '
-                        f'raw_elapsed={raw_elapsed:.2f} wait={wait:.2f} left={left:.2f}'
-                    )
-                    self.sleep(wait, check_combat=False)
-                    self.check_liber()
-                    if not self.in_liberation:
-                        return False
+                wait = 1.4
+                self.logger.info(
+                    f'zani: r2-gate smash-guard phase={self._liber_phase} '
+                    f'smash_left={smash_left:.2f} '
+                    f'raw_elapsed={raw_elapsed:.2f} wait={wait:.2f} fixed=True '
+                    f'left_before={left:.2f}'
+                )
+                self.sleep(wait, check_combat=False)
+                self.check_liber()
+                left_after = self.liberation_time_left()
+                self.logger.info(
+                    f'zani: r2-gate smash-guard result=wait-finished fixed=True '
+                    f'left_after={left_after:.2f} in_liberation={self.in_liberation}'
+                )
+                if not self.in_liberation:
+                    return False
             self.logger.info(
                 f'zani: r2-gate result=end reason=smash-cleared phase={self._liber_phase} '
                 f'smash_left={smash_left:.2f} left={left:.2f} elapsed={time.time() - start:.2f}'
