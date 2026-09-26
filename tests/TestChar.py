@@ -45,9 +45,11 @@ class TestChar(TaskTestCase):
     task_class = AutoCombatTask
     config = config
 
-    def test_healer_disables_f_check_on_switch_by_default(self):
-        self.assertFalse(BaseChar(None, 0, char_type=CharType.HEALER).check_f_on_switch)
+    def test_f_check_on_switch_enabled_by_default_with_per_char_opt_out(self):
+        self.assertTrue(BaseChar(None, 0, char_type=CharType.HEALER).check_f_on_switch)
         self.assertTrue(BaseChar(None, 0, char_type=CharType.MAIN_DPS).check_f_on_switch)
+        self.assertTrue(ShoreKeeper(None, 0, char_type=CharType.HEALER).check_f_on_switch)
+        self.assertFalse(Suisui(None, 0, char_type=CharType.HEALER).check_f_on_switch)
 
     def test_combat_once_switches_to_healer_before_and_after_combat(self):
         combat = BaseCombatTask.__new__(BaseCombatTask)

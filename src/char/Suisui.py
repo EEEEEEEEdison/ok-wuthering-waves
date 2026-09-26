@@ -13,6 +13,7 @@ class Suisui(BaseChar):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.check_f_on_switch = False
         self.last_forte3_switch = -1
         self.should_heavy = False
 

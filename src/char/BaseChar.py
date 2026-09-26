@@ -105,7 +105,7 @@ class BaseChar:
         self.set_buff_time(buff_time)
         self.last_buff_time = -1
         self.logger = Logger.get_logger(self.name)
-        self.check_f_on_switch = not self.is_healer
+        self.check_f_on_switch = True
         self.cycle_start_time = 0.0
         self.cycle_time_out = 1.1
         self.cycle_intro_time = 1.2
